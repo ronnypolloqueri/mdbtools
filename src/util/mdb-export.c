@@ -18,12 +18,77 @@
 
 #include "mdbtools.h"
 
+#define MAX_SIZE_ITEMS_IN_LIST 100
+#define MAX_NUMBER_FIELDS_PER_TABLE 50
+#define MAX_LENGTH_COLUMN_NAME 100
+
 #define EXPORT_BIND_SIZE 200000
 
 #define is_binary_type(x) (x==MDB_OLE || x==MDB_BINARY || x==MDB_REPID)
 
 static char *escapes(char *s);
 
+typedef struct {
+	char key[MAX_LENGTH_COLUMN_NAME];
+	char value[MAX_LENGTH_COLUMN_NAME];
+} Set;
+
+struct List {
+	Set items[MAX_SIZE_ITEMS_IN_LIST];
+	int size;
+};
+
+char * List_get_value(struct List *obj, char key[])
+{
+	int found = 0, i = 0;
+	while (found != 1 && i < obj->size){
+		if (strcmp(obj->items[i].key, key) == 0 ){
+			found = 1;
+			break;
+		}
+		i++;
+	}
+	if (found) {
+		return obj->items[i].value;
+	} else {
+		return NULL;
+	}
+}
+
+void List_add(struct List *obj, char element[])
+{
+	char *token;
+	if (obj->size < MAX_SIZE_ITEMS_IN_LIST) {
+		token = strtok(element, ":");
+		if (token!= NULL) {
+			strcpy(obj->items[obj->size].key, token);
+		}
+		// Next token
+		token = strtok(NULL, ":");
+		if (token != NULL) {
+			strcpy(obj->items[obj->size].value, token);
+		}
+		obj->size++;
+	}
+}
+
+void List_fill_list(struct List *obj, char items[])
+{
+	char *result;
+	char words[MAX_NUMBER_FIELDS_PER_TABLE][2 * MAX_LENGTH_COLUMN_NAME + 1];
+	int counter = 0;
+
+	result = strtok(items, " ");
+	while (result != NULL) {
+		strcpy(words[counter], result);
+		counter++;
+		result = strtok(NULL, " ");
+	}
+
+	for (int i = 0; i < counter; i++){
+		List_add(obj, words[i]);
+	}
+}
 int
 main(int argc, char **argv)
 {
@@ -83,7 +148,8 @@ main(int argc, char **argv)
 		exit (1);
 	}
 
-	if (argc != 3) {
+	//if (argc != 3) {
+	if (argc != 5) {
 		fputs("Wrong number of arguments.\n\n", stderr);
 		fputs(g_option_context_get_help(opt_context, TRUE, NULL), stderr);
 		exit(1);
@@ -188,7 +254,12 @@ main(int argc, char **argv)
 		}
 		fputs(row_delimiter, outfile);
 	}
-
+	// My changes
+	struct List list;
+	list.size = 0;
+	// argv[3]: mdb_column_name1:mysql_column_name1,mdb_column_name2:...
+	List_fill_list(&list, argv[3]);
+	// End my changes
 	// TODO refactor this into functions
 	if (mdb->default_backend->capabilities & MDB_SHEXP_BULK_INSERT) {
 		//for efficiency do multi row insert on engines that support this
@@ -197,13 +268,21 @@ main(int argc, char **argv)
 			if (counter % batch_size == 0) {
 				counter = 0; // reset to 0, prevent overflow on extremely large data sets.
 				char *quoted_name;
-				quoted_name = mdb->default_backend->quote_schema_name(namespace, argv[2]);
+				// Rename output table
+				if (argc==5){
+					quoted_name = mdb->default_backend->quote_schema_name(namespace, argv[4]);
+				} else {
+					quoted_name = mdb->default_backend->quote_schema_name(namespace, argv[2]);
+				}
 				fprintf(outfile, "INSERT INTO %s (", quoted_name);
 				free(quoted_name);
 				for (i = 0; i < table->num_cols; i++) {
 					if (i > 0) fputs(", ", outfile);
 					col = g_ptr_array_index(table->columns, i);
-					quoted_name = mdb->default_backend->quote_schema_name(NULL, col->name);
+					quoted_name = mdb->default_backend->quote_schema_name(NULL,
+					//		  col->name
+							List_get_value(&list, col->name)
+					);
 					fputs(quoted_name, outfile);
 					free(quoted_name);
 				}
@@ -356,3 +435,16 @@ static char *escapes(char *s)
 	g_free(orig);
 	return d;
 }
+
+/*
+static int count_ocurrences(const char *word, char c)
+{
+	int counter = 0;
+	int length = strlen(word);
+	for (int i = 0; i < length; i++) {
+		if (word[i] == c) contador++;
+	}
+	return counter;
+}
+*/
+
